@@ -121,7 +121,7 @@ def before_request():
 model = load_model()
 
 if __name__ == '__main__':
-    port = os.environ.get('PORT', 5000)
+    port = os.environ.get('PORT', 5042)
 
     if "prepare" not in sys.argv:
         app.jinja_env.auto_reload = True
