@@ -29,7 +29,7 @@ async def download_file(url, dest):
             data = await response.read()
             with open(dest, 'wb') as f: f.write(data)
                 
-def load_model():
+async def load_model():
     await dowdload_file(export_file_url,path/export_file_name)
     learn = load_learner(path, export_file_name)
     return learn
