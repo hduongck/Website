@@ -19,7 +19,7 @@ app = Flask(__name__)
 
 path = Path(__file__).parent
 
-export_file_url = 'https://drive.google.com/file/d/1907V4ieruy_M0gYDweNAia1pAIVzMdxC/view?usp=sharing'
+export_file_url = 'https://drive.google.com/uc?export=download&id=1907V4ieruy_M0gYDweNAia1pAIVzMdxC'
 export_file_name = 'model.pkl'
 
 async def download_file(url, dest):
