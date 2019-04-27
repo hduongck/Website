@@ -1,26 +1,23 @@
+from starlette.applications import Starlette
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.staticfiles import StaticFiles
+from starlette.middleware.cors import CORSMiddleware
+import uvicorn, aiohttp, asyncio
+from io import BytesIO
+
 from fastai import *
 from fastai.vision import *
-import fastai
-import yaml
-import sys
-from io import BytesIO
-from typing import List, Dict, Union, ByteString, Any
-import os
-import flask
-from flask import Flask
-import requests
-import torch
-import json
 
-with open("src/config.yaml", 'r') as stream:
-    APP_CONFIG = yaml.load(stream)
-
-app = Flask(__name__)
-
-path = Path(__file__).parent
-
+# export_file_url = 'https://www.dropbox.com/s/v6cuuvddq73d1e0/export.pkl?raw=1'
 export_file_url = 'https://drive.google.com/uc?export=download&id=1907V4ieruy_M0gYDweNAia1pAIVzMdxC'
 export_file_name = 'model.pkl'
+
+classes = ['black', 'grizzly', 'teddys']
+path = Path(__file__).parent
+
+app = Starlette()
+app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_headers=['X-Requested-With', 'Content-Type'])
+app.mount('/static', StaticFiles(directory='app/static'))
 
 async def download_file(url, dest):
     if dest.exists(): return
@@ -28,103 +25,37 @@ async def download_file(url, dest):
         async with session.get(url) as response:
             data = await response.read()
             with open(dest, 'wb') as f: f.write(data)
-                
-async def load_model():
-    await dowdload_file(export_file_url,path/export_file_name)
-    learn = load_learner(path, export_file_name)
-    return learn
 
+async def setup_learner():
+    await download_file(export_file_url, path/export_file_name)
+    try:
+        learn = load_learner(path, export_file_name)
+        return learn
+    except RuntimeError as e:
+        if len(e.args) > 0 and 'CPU-only machine' in e.args[0]:
+            print(e)
+            message = "\n\nThis model was trained with an old version of fastai and will not work in a CPU environment.\n\nPlease update the fastai library in your training environment and export your model again.\n\nSee instructions for 'Returning to work' at https://course.fast.ai."
+            raise RuntimeError(message)
+        else:
+            raise
 
-def load_image_url(url: str) -> Image:
-    response = requests.get(url)
-    img = open_image(BytesIO(response.content))
-    return img
-
-
-def load_image_bytes(raw_bytes: ByteString) -> Image:
-    img = open_image(BytesIO(raw_bytes))
-    return img
-
-
-def predict(img, n: int = 3) -> Dict[str, Union[str, List]]:
-    pred_class, pred_idx, outputs = model.predict(img)
-    pred_probs = outputs / sum(outputs)
-    pred_probs = pred_probs.tolist()
-    predictions = []
-    for image_class, output, prob in zip(model.data.classes, outputs.tolist(), pred_probs):
-        output = round(output, 1)
-        prob = round(prob, 2)
-        predictions.append(
-            {"class": image_class.replace("_", " "), "output": output, "prob": prob}
-        )
-
-    predictions = sorted(predictions, key=lambda x: x["output"], reverse=True)
-    predictions = predictions[0:n]
-    return {"class": str(pred_class), "predictions": predictions}
-
-
-@app.route('/api/classify', methods=['POST', 'GET'])
-def upload_file():
-    if flask.request.method == 'GET':
-        url = flask.request.args.get("url")
-        img = load_image_url(url)
-    else:
-        bytes = flask.request.files['file'].read()
-        img = load_image_bytes(bytes)
-    res = predict(img)
-    return flask.jsonify(res)
-
-
-@app.route('/api/classes', methods=['GET'])
-def classes():
-    classes = sorted(model.data.classes)
-    return flask.jsonify(classes)
-
-
-@app.route('/ping', methods=['GET'])
-def ping():
-    return "pong"
-
-
-@app.route('/config')
-def config():
-    return flask.jsonify(APP_CONFIG)
-
-
-@app.after_request
-def add_header(response):
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, public, max-age=0"
-    response.headers["Expires"] = 0
-    response.headers["Pragma"] = "no-cache"
-
-    response.cache_control.max_age = 0
-    return response
-
-
-@app.route('/<path:path>')
-def static_file(path):
-    if ".js" in path or ".css" in path:
-        return app.send_static_file(path)
-    else:
-        return app.send_static_file('index.html')
-
+loop = asyncio.get_event_loop()
+tasks = [asyncio.ensure_future(setup_learner())]
+learn = loop.run_until_complete(asyncio.gather(*tasks))[0]
+loop.close()
 
 @app.route('/')
-def root():
-    return app.send_static_file('index.html')
+def index(request):
+    html = path/'view'/'index.html'
+    return HTMLResponse(html.open().read())
 
-
-def before_request():
-    app.jinja_env.cache = {}
-
-
-model = load_model()
+@app.route('/analyze', methods=['POST'])
+async def analyze(request):
+    data = await request.form()
+    img_bytes = await (data['file'].read())
+    img = open_image(BytesIO(img_bytes))
+    prediction = learn.predict(img)[0]
+    return JSONResponse({'result': str(prediction)})
 
 if __name__ == '__main__':
-    port = os.environ.get('PORT', 5042)
-
-    if "prepare" not in sys.argv:
-        app.jinja_env.auto_reload = True
-        app.config['TEMPLATES_AUTO_RELOAD'] = True
-        app.run(debug=False, host='0.0.0.0', port=port)
-        # app.run(host='0.0.0.0', port=port)
+    if 'serve' in sys.argv: uvicorn.run(app=app, host='0.0.0.0', port=5042)
